@@ -7,6 +7,7 @@ class Indexer(object):
         self.verbose = verbose
         self.index_file = index_file
         self.index_thread = None
+        self.server_thread = None
         self.includes = []
         self.observer = None
         self.clear()
@@ -142,13 +143,24 @@ class Indexer(object):
     def on_event(self):
         yield
 
-    def GetUnusedLocalhostPort():
+    def GetUnusedLocalhostPort(self):
         sock = socket.socket()
         # This tells the OS to give us any free port in the range [1024 - 65535]
         sock.bind( ( '', 0 ) )
         port = sock.getsockname()[ 1 ]
         sock.close()
         return port
+
+    def StartServer(self):
+        port = self.GetUnusedLocalhostPort()
+        self.server_thread = threading.Thread(target=self.run, args=(port,))
+        self.server_thread.start()
+        return port
+
+    def StopServer(self):
+        if self.server_thread:
+            self.server_thread.stop()
+            self.server_thread = None
 
     def run(self, port = 10000):
         """Start TCP server to answer basic grammar:
@@ -161,24 +173,24 @@ class Indexer(object):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         server_address = ('localhost', int(port))
-        print >>sys.stderr, 'Starting up on %s port %s' % server_address
+        #print >>sys.stderr, 'Starting up on %s port %s' % server_address
         sock.bind(server_address)
         # Listen for incoming connections
         sock.listen(1)
         while True:
             # Wait for a connection
-            print >>sys.stderr, 'Waiting for a connection'
+            #print >>sys.stderr, 'Waiting for a connection'
             connection, client_address = sock.accept()
             try:
-                print >>sys.stderr, 'Connection from', client_address
+                #print >>sys.stderr, 'Connection from', client_address
                 # Receive the data in small chunks and retransmit it
                 while True:
                     data = connection.recv(2048)
-                    print >>sys.stderr, 'Received "%s"' % data.rstrip()
+                    #print >>sys.stderr, 'Received "%s"' % data.rstrip()
                     if data:
                         if data.startswith('INDEX'):
                             lookup = data[6:].rstrip()
-                            print >>sys.stderr, "INDEX for '%s'" % lookup
+                            #print >>sys.stderr, "INDEX for '%s'" % lookup
                             if not self.index_thread:
                                 sources = self.crawl(lookup)
                                 self.clear()
@@ -189,7 +201,7 @@ class Indexer(object):
                                 connection.sendall("BUSY\n")
                         elif data.startswith('AUTO'):
                             lookup = data[5:].rstrip()
-                            print >>sys.stderr, "AUTO for '%s'" % lookup
+                            #print >>sys.stderr, "AUTO for '%s'" % lookup
                             matches = set()
                             matches |= set([ k for k,v in self.functions.items() if k.startswith(lookup)])
                             matches |= set([ k for k,v in self.types.items() if k.startswith(lookup)])
@@ -197,7 +209,7 @@ class Indexer(object):
                                 connection.sendall("%s\n" % match)
                         elif data.startswith('IMPL'):
                             lookup = data[5:].rstrip()
-                            print >>sys.stderr, "IMPL for '%s'" % lookup
+                            #print >>sys.stderr, "IMPL for '%s'" % lookup
                             impl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
@@ -206,7 +218,7 @@ class Indexer(object):
                                 connection.sendall("%s:%d\n" % (impl['file'], impl['line']))
                         elif data.startswith('DECL'):
                             lookup = data[5:].rstrip()
-                            print >>sys.stderr, "DECL for '%s'" % lookup
+                            #print >>sys.stderr, "DECL for '%s'" % lookup
                             decl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_DECL']:
@@ -220,7 +232,7 @@ class Indexer(object):
                                 connection.sendall("%s:%d\n" % (decl['file'], decl['line']))
                         elif data.startswith('CALLS'):
                             lookup = data[6:].rstrip()
-                            print >>sys.stderr, "CALLS for '%s'" % lookup
+                            #print >>sys.stderr, "CALLS for '%s'" % lookup
                             calls = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
@@ -236,7 +248,7 @@ class Indexer(object):
                         connection.sendall("DONE\n")
 
                     else:
-                        print >>sys.stderr, 'no more data from', client_address
+                        #print >>sys.stderr, 'no more data from', client_address
                         break
             finally:
                 # Clean up the connection

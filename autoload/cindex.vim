@@ -2,13 +2,8 @@
 " Author: Jerome Poichet <poitch@gmail.com>
 " License: MIT
 
-if exists('loaded_jpo') || &compatible || v:version < 700
-    finish
-endif
-let loaded_jpo = 1
 let s:script_folder_path = escape( expand( '<sfile>:p:h' ), '\' )
-echom s:script_folder_path
-let s:indexer_command = s:script_folder_path . "search"
+let s:indexer_command = s:script_folder_path . "../python/cindex/search.py"
 
 function! cindex#Enable()
     if s:SetupPython() != 1
@@ -22,7 +17,16 @@ endfunction
 function! cindex#StartServer()
 python << endpython
 import vim
+port = cindexer.StartServer()
+vim.command("let s:cindex_port = {0}".format(port))
+vim.command('echom "Port = " . s:cindex_port')
+endpython
+endfunction
 
+function! cindex#StopServer()
+python << endpython
+import vim
+cindexer.StopServer()
 endpython
 endfunction
 
@@ -46,7 +50,7 @@ function! cindex#JumpToImplementation()
 
 	if filereadable(file_name)
 		let l:bufn = bufnr("%")
-		exec ":bwipeout " l:bufn
+        "exec ":bwipeout " l:bufn
 
 		exec "keepalt edit " . file_name
 		exec ":" . line_num
@@ -67,10 +71,11 @@ import traceback
 import vim
 # Add python sources folder to the system path.
 script_folder = vim.eval( 's:script_folder_path' )
-sys.path.insert( 0, os.path.join( script_folder, '..', 'python' ) )
+include_folder = os.path.join( script_folder, '..', 'python' )
+sys.path.insert( 0, include_folder )
 try:
-    from cindex import server
-    vim.command( "echom 'Hello'" )
+    from cindex.setup import SetupCIndex
+    cindexer = SetupCIndex()
 except Exception as error:
     vim.command( 'redraw | echohl WarningMsg' )
     for line in traceback.format_exc().splitlines():
@@ -91,6 +96,6 @@ endfunction
 
 function s:SetupCommands()
     command! CIJumpToImplementation call cindex#JumpToImplementation()
+    command! CIRestartServer call cindex#StartServer()
 endfunction
-
 
