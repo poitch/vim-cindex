@@ -26,27 +26,25 @@ endfunction
 
 
 function! cindex#SendMessage(msg)
-  echom "system " . s:indexer_command . " --port " . s:cindex_port ." " . a:msg
+  "echom "system " . s:indexer_command . " --port " . s:cindex_port ." " . a:msg
   return system(s:indexer_command . " --port " . s:cindex_port . " " . a:msg)
 endfunction
 
 " Stops vim.cindex server
 function! cindex#StopServer()
-  system(s:indexer_command . " --port " . s:cindex_port . " QUIT ")
+  call system(s:indexer_command . " --port " . s:cindex_port . " QUIT ")
 endfunction
 
 " Reindex files within current directory
 function! cindex#Reindex()
     let curDir = getcwd()
-    let location = system(s:indexer_command . " --port " . s:cindex_port . " INDEX " . curDir)
+    call cindex#SendMessage("INDEX " . curDir)
 endfunction
 
 function! cindex#JumpToImplementation()
   let wordUnderCursor = expand("<cword>")
   "silent !clear
-  echom "system " . s:indexer_command . " --port " . s:cindex_port ." IMPL " . wordUnderCursor
-  let location = system(s:indexer_command . " --port " . s:cindex_port ." IMPL " . wordUnderCursor)
-  echom "Location = " . location
+  let location = cindex#SendMessage("IMPL " . wordUnderCursor)
   let names =  matchlist( location, '\(.\{-1,}\):\%(\(\d\+\)\%(:\(\d*\):\?\)\?\)\?')
   if empty(names)
     return
@@ -104,5 +102,6 @@ function s:SetupCommands()
     command! CIJumpToImplementation call cindex#JumpToImplementation()
     command! CIStartServer call cindex#StartServer()
     command! CIStopServer call cindex#StopServer()
+    command! CIIndex call cindex#Reindex()
 endfunction
 

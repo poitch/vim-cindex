@@ -170,10 +170,7 @@ class Indexer(object):
 
         self.index_thread = None
 
-    def on_event(self):
-        yield
-
-    def GetUnusedLocalhostPort(self):
+    def _get_unused_local_port(self):
         sock = socket.socket()
         # This tells the OS to give us any free port in the range [1024 -
         # 65535]
@@ -183,7 +180,7 @@ class Indexer(object):
         return port
 
     def StartServer(self):
-        port = self.GetUnusedLocalhostPort()
+        port = self._get_unused_local_port()
         self.server_thread = threading.Thread(target=self.run, args=(port,))
         self.server_thread.start()
         return port
@@ -253,8 +250,8 @@ class Indexer(object):
                                     impl = self.functions[
                                         lookup]['FUNCTION_IMPL']
                             if impl:
-                                connection.sendall("%s:%d\n" % (
-                                    impl['file'], impl['line']))
+                                connection.sendall("%s:%d:%d\n" % (
+                                    impl['file'], impl['line'], impl['column']))
                         elif data.startswith('DECL'):
                             lookup = data[5:].rstrip()
                             #print >>sys.stderr, "DECL for '%s'" % lookup
@@ -270,8 +267,8 @@ class Indexer(object):
                                 if 'file' in self.types[lookup]['TYPE_DECL']:
                                     decl = self.types[lookup]['TYPE_DECL']
                             if decl:
-                                connection.sendall("%s:%d\n" % (
-                                    decl['file'], decl['line']))
+                                connection.sendall("%s:%d:%d\n" % (
+                                    decl['file'], decl['line'], decl['column']))
                         elif data.startswith('CALLS'):
                             lookup = data[6:].rstrip()
                             #print >>sys.stderr, "CALLS for '%s'" % lookup
@@ -284,8 +281,8 @@ class Indexer(object):
                                     calls = self.types[lookup]['TYPE_REF']
                             if (calls and len(calls) > 0):
                                 for call in calls:
-                                    connection.sendall("%s:%d\n" % (
-                                        call['file'], call['line']))
+                                    connection.sendall("%s:%d:%d\n" % (
+                                        call['file'], call['line'], call['column']))
 
                         # If we got that far, it means we did not find an
                         # answer
@@ -307,6 +304,37 @@ class Indexer(object):
         if not tpe in self.types:
             self.types[tpe] = {'TYPE_DECL': {}, 'TYPE_REF': []}
 
+    def _location_to_json(self, location):
+            return {
+                'file': location.file.name,
+                'line': location.line,
+                'column': location.column,
+            }
+
+    def _add_func(self, node):
+        self._init_func(node.spelling)
+        if os.path.splitext(node.location.file.name)[1] in ['.c', '.cpp']:
+            self.functions[node.spelling][
+                'FUNCTION_IMPL'] = self._location_to_json(node.location)
+        else:
+            self.functions[node.spelling][
+                'FUNCTION_DECL'] = self._location_to_json(node.location)
+
+    def _add_type(self, node):
+        self._init_type(node.spelling)
+        self.types[node.spelling][
+            'TYPE_DECL'] = self._location_to_json(node.location)
+
+    def _add_call(self, node):
+        self._init_func(node.spelling)
+        self.functions[node.spelling]['CALL_EXPR'].append(
+            self._location_to_json(node.location))
+
+    def _add_ref(self, node):
+        self._init_type(node.spelling)
+        self.types[node.spelling]['TYPE_REF'].append(
+            self._location_to_json(node.location))
+
     def parse(self, node, filename):
         try:
             if self.verbose:
@@ -315,45 +343,24 @@ class Indexer(object):
                 if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
                     if self.verbose:
                         print 'FUNCTION_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                    self._init_func(node.spelling)
-                    if os.path.splitext(filename)[1] in ['.c', '.cpp']:
-                        self.functions[node.spelling]['FUNCTION_IMPL'] = {
-                            'file': node.location.file.name,
-                            'line': node.location.line,
-                        }
-                    else:
-                        self.functions[node.spelling]['FUNCTION_DECL'] = {
-                            'file': node.location.file.name,
-                            'line': node.location.line,
-                        }
+                    self._add_func(node)
                 elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
                     if self.verbose:
                         print 'TYPE_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                    self._init_type(node.spelling)
-                    self.types[node.spelling]['TYPE_DECL'] = {
-                        'file': node.location.file.name,
-                        'line': node.location.line,
-                    }
+                    self._add_type(node)
                 elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
                     if self.verbose:
                         print 'CALL:%s:%s: %d' % (node.spelling, node.location.file.name, node.location.line)
-                    self._init_func(node.spelling)
-                    self.functions[node.spelling]['CALL_EXPR'].append({
-                        'file': node.location.file.name,
-                        'line': node.location.line,
-                    })
+                    self._add_call(node)
                 elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
                     if self.verbose:
                         print 'TYPE_REF:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                    self._init_type(node.spelling)
-                    self.types[node.spelling]['TYPE_REF'].append({
-                        'file': node.location.file.name,
-                        'line': node.location.line,
-                    })
+                    self._add_ref(node)
         except ValueError:
             # Incompatible libclang and pyclang?
             if self.verbose:
-                print >>sys.stderr, "Ignoring node %s %s %d" % (node.spelling, node.location.file.name, node.location.line)
+                print >>sys.stderr, "Ignoring node %s %s %d" % (
+                    node.spelling, node.location.file.name, node.location.line)
 
         for c in node.get_children():
             self.parse(c, filename)
