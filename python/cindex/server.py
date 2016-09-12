@@ -1,9 +1,19 @@
 #!/usr/bin/env python
-import argparse, clang.cindex, os, platform, re, socket, sys, threading, time
+import argparse
+import clang.cindex
+import os
+import platform
+import re
+import socket
+import sys
+import threading
+import time
 import watchdog
 
+
 class Indexer(object):
-    def __init__(self, verbose = False, index_file = None):
+
+    def __init__(self, verbose=False, index_file=None):
         self.verbose = verbose
         self.index_file = index_file
         self.index_thread = None
@@ -15,6 +25,9 @@ class Indexer(object):
         # Setup clang
         if platform.platform().startswith('Darwin'):
             lib_path = '/Library/Developer/CommandLineTools/usr/lib/libclang.dylib'
+            clang.cindex.Config.set_library_file(lib_path)
+        elif platform.platform().startswith('Linux'):
+            lib_path = '/usr/lib/youcompleteme/third_party/ycmd/libclang.so'
             clang.cindex.Config.set_library_file(lib_path)
         else:
             from ctypes.util import find_library
@@ -34,8 +47,9 @@ class Indexer(object):
                     sources.append(filename)
         return sources
 
-    def index(self, files = [], root = None):
-        print >>sys.stderr, 'Indexing %d file(s)...' % len(files)
+    def index(self, files=[], root=None):
+        if self.verbose:
+            print >>sys.stderr, 'Indexing %d file(s)...' % len(files)
         t0 = time.time()
         # Create internal structure
         for filename in files:
@@ -52,79 +66,95 @@ class Indexer(object):
                     impl = fn['FUNCTION_IMPL']
                     calls = fn['CALL_EXPR']
                     if (decl and decl['file'] == filename):
-                        print >>sys.stderr, 'Removing function %s declaration from %s' % (k, filename)
+                        if self.verbose:
+                            print >>sys.stderr, 'Removing function %s declaration from %s' % (
+                                k, filename)
                         del self.functions[k]['FUNCTION_DECL']
                     if (impl and impl['file'] == filename):
-                        print >>sys.stderr, 'Removing function %s implementation from %s' % (k, filename)
+                        if self.verbose:
+                            print >>sys.stderr, 'Removing function %s implementation from %s' % (
+                                k, filename)
                         del self.functions[k]['FUNCTION_IMPL']
                     for idx, call in enumerate(calls):
                         if call['file'] == filename:
-                            print >>sys.stderr, 'Removing function %s call from %s' % (k, filename)
+                            if self.verbose:
+                                print >>sys.stderr, 'Removing function %s call from %s' % (
+                                    k, filename)
                             del self.functions[k]['CALL_EXPR'][idx]
 
                 self.parse(tu.cursor, filename)
             except clang.cindex.TranslationUnitLoadError:
-                print 'Failed ot parse %s' % filename
+                if self.verbose:
+                    print 'Failed ot parse %s' % filename
         t1 = time.time()
 
-        print >>sys.stderr, 'Done indexing %d file(s) %d function(s) %d type(s) in %0.3f ms...' % (len(files), len(self.functions), len(self.types), (t1 - t0) * 1000.0)
+        if self.verbose:
+            print >>sys.stderr, 'Done indexing %d file(s) %d function(s) %d type(s) in %0.3f ms...' % (
+                len(files), len(self.functions), len(self.types), (t1 - t0) * 1000.0)
 
         if self.index_file:
-            print >>sys.stderr, 'Saving index into %s' % self.index_file
+            if self.verbose:
+                print >>sys.stderr, 'Saving index into %s' % self.index_file
             with open(self.index_file, 'w') as output:
                 for function in self.functions:
                     defined = False
                     if 'file' in self.functions[function]['FUNCTION_DECL']:
-                        output.write("DECL %s (%s:%d)\n" % (function, self.functions[function]['FUNCTION_DECL']['file'], self.functions[function]['FUNCTION_DECL']['line']))
+                        output.write("DECL %s (%s:%d)\n" % (function, self.functions[function][
+                                     'FUNCTION_DECL']['file'], self.functions[function]['FUNCTION_DECL']['line']))
                         defined = True
                     if 'file' in self.functions[function]['FUNCTION_IMPL']:
-                        output.write("IMPL %s (%s:%d)\n" % (function, self.functions[function]['FUNCTION_IMPL']['file'], self.functions[function]['FUNCTION_IMPL']['line']))
+                        output.write("IMPL %s (%s:%d)\n" % (function, self.functions[function][
+                                     'FUNCTION_IMPL']['file'], self.functions[function]['FUNCTION_IMPL']['line']))
                         defined = True
                     if defined:
                         for call in self.functions[function]['CALL_EXPR']:
-                            output.write("CALL %s (%s:%d)\n" % (function, call['file'], call['line']))
+                            output.write("CALL %s (%s:%d)\n" %
+                                         (function, call['file'], call['line']))
                 for tpe in self.types:
                     if 'file' in self.types[tpe]['TYPE_DECL']:
-                        output.write("TYPE %s (%s:%d)\n" % (function, self.types[tpe]['TYPE_DECL']['file'], self.types[tpe]['TYPE_DECL']['line']))
+                        output.write("TYPE %s (%s:%d)\n" % (function, self.types[tpe][
+                                     'TYPE_DECL']['file'], self.types[tpe]['TYPE_DECL']['line']))
                         for call in self.types[tpe]['TYPE_REF']:
-                            output.write("REF %s (%s:%d)\n" % (function, call['file'], call['line']))
+                            output.write("REF %s (%s:%d)\n" %
+                                         (function, call['file'], call['line']))
         if root:
             # Attempt to watch changes if monitor is available
             try:
                 from watchdog.observers import Observer
                 from watchdog.events import FileSystemEventHandler
+
                 class EventHandler(FileSystemEventHandler):
+
                     def __init__(self, indexer):
                         self.indexer = indexer
 
                     def on_deleted(self, event):
-                        print 'On Deleted'
                         # That one is tricky, we technically need to clean up
                         # files deleted from the internal structures
-
+                        return
 
                     def on_modified(self, event):
-                        print 'On Modified'
                         if not event.is_directory:
                             self.indexer.index([event.src_path])
 
                     def on_created(self, event):
-                        print 'On Created'
                         if not event.is_directory:
                             self.indexer.index([event.src_path])
                         else:
                             sources = self.indexer.crawl(event.src_path)
                             self.indexer.index(sources)
 
-                print >>sys.stderr, 'Watching changes under %s' % root
+                if self.verbose:
+                    print >>sys.stderr, 'Watching changes under %s' % root
                 if self.observer:
                     self.observer.stop()
                 handler = EventHandler(self)
                 self.observer = Observer()
-                self.observer.schedule(handler, root, recursive = True)
+                self.observer.schedule(handler, root, recursive=True)
                 self.observer.start()
             except ImportError:
-                print >>sys.stderr, 'File monitor not available'
+                if self.verbose:
+                    print >>sys.stderr, 'File monitor not available'
 
         # Debug output of structure
         if self.verbose:
@@ -145,9 +175,10 @@ class Indexer(object):
 
     def GetUnusedLocalhostPort(self):
         sock = socket.socket()
-        # This tells the OS to give us any free port in the range [1024 - 65535]
-        sock.bind( ( '', 0 ) )
-        port = sock.getsockname()[ 1 ]
+        # This tells the OS to give us any free port in the range [1024 -
+        # 65535]
+        sock.bind(('', 0))
+        port = sock.getsockname()[1]
         sock.close()
         return port
 
@@ -162,7 +193,7 @@ class Indexer(object):
             self.server_thread.stop()
             self.server_thread = None
 
-    def run(self, port = 10000):
+    def run(self, port=10000):
         """Start TCP server to answer basic grammar:
             DECL <name> returns location of function/type declaration
             IMPL <name> returns locatino of function/type implementation
@@ -188,13 +219,17 @@ class Indexer(object):
                     data = connection.recv(2048)
                     #print >>sys.stderr, 'Received "%s"' % data.rstrip()
                     if data:
-                        if data.startswith('INDEX'):
+                        if data.startswith('QUIT'):
+                            connection.sendall("DONE\n")
+                            break
+                        elif data.startswith('INDEX'):
                             lookup = data[6:].rstrip()
                             #print >>sys.stderr, "INDEX for '%s'" % lookup
                             if not self.index_thread:
                                 sources = self.crawl(lookup)
                                 self.clear()
-                                self.index_thread = threading.Thread(target=self.index, args=(sources,lookup,))
+                                self.index_thread = threading.Thread(
+                                    target=self.index, args=(sources, lookup,))
                                 self.index_thread.start()
                                 connection.sendall("INDEXING\n")
                             else:
@@ -203,8 +238,10 @@ class Indexer(object):
                             lookup = data[5:].rstrip()
                             #print >>sys.stderr, "AUTO for '%s'" % lookup
                             matches = set()
-                            matches |= set([ k for k,v in self.functions.items() if k.startswith(lookup)])
-                            matches |= set([ k for k,v in self.types.items() if k.startswith(lookup)])
+                            matches |= set(
+                                [k for k, v in self.functions.items() if k.startswith(lookup)])
+                            matches |= set(
+                                [k for k, v in self.types.items() if k.startswith(lookup)])
                             for match in matches:
                                 connection.sendall("%s\n" % match)
                         elif data.startswith('IMPL'):
@@ -213,23 +250,28 @@ class Indexer(object):
                             impl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
-                                    impl = self.functions[lookup]['FUNCTION_IMPL']
+                                    impl = self.functions[
+                                        lookup]['FUNCTION_IMPL']
                             if impl:
-                                connection.sendall("%s:%d\n" % (impl['file'], impl['line']))
+                                connection.sendall("%s:%d\n" % (
+                                    impl['file'], impl['line']))
                         elif data.startswith('DECL'):
                             lookup = data[5:].rstrip()
                             #print >>sys.stderr, "DECL for '%s'" % lookup
                             decl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_DECL']:
-                                    decl = self.functions[lookup]['FUNCTION_DECL']
+                                    decl = self.functions[
+                                        lookup]['FUNCTION_DECL']
                                 elif 'file' in self.functions[lookup]['FUNCTION_IMPL']:
-                                    decl = self.functions[lookup]['FUNCTION_IMPL']
+                                    decl = self.functions[
+                                        lookup]['FUNCTION_IMPL']
                             elif lookup in self.types:
                                 if 'file' in self.types[lookup]['TYPE_DECL']:
                                     decl = self.types[lookup]['TYPE_DECL']
                             if decl:
-                                connection.sendall("%s:%d\n" % (decl['file'], decl['line']))
+                                connection.sendall("%s:%d\n" % (
+                                    decl['file'], decl['line']))
                         elif data.startswith('CALLS'):
                             lookup = data[6:].rstrip()
                             #print >>sys.stderr, "CALLS for '%s'" % lookup
@@ -242,9 +284,11 @@ class Indexer(object):
                                     calls = self.types[lookup]['TYPE_REF']
                             if (calls and len(calls) > 0):
                                 for call in calls:
-                                    connection.sendall("%s:%d\n" % (call['file'], call['line']))
+                                    connection.sendall("%s:%d\n" % (
+                                        call['file'], call['line']))
 
-                        # If we got that far, it means we did not find an answer
+                        # If we got that far, it means we did not find an
+                        # answer
                         connection.sendall("DONE\n")
 
                     else:
@@ -256,75 +300,80 @@ class Indexer(object):
 
     def _init_func(self, func):
         if not func in self.functions:
-            self.functions[func] = {'FUNCTION_IMPL': {}, 'FUNCTION_DECL':{}, 'CALL_EXPR': []}
+            self.functions[func] = {'FUNCTION_IMPL': {},
+                                    'FUNCTION_DECL': {}, 'CALL_EXPR': []}
 
     def _init_type(self, tpe):
         if not tpe in self.types:
-            self.types[tpe] = {'TYPE_DECL':{}, 'TYPE_REF': []}
+            self.types[tpe] = {'TYPE_DECL': {}, 'TYPE_REF': []}
 
     def parse(self, node, filename):
-        if self.verbose:
-            print 'Node %s %s %d' % (node.kind, node.spelling, node.location.line)
-        if (node.location.file and node.location.file.name == filename):
-            if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
-                if self.verbose:
-                    print 'FUNCTION_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                self._init_func(node.spelling)
-                if os.path.splitext(filename)[1] in ['.c', '.cpp']:
-                    self.functions[node.spelling]['FUNCTION_IMPL'] = {
+        try:
+            if self.verbose:
+                print 'Node %s %s %d' % (node.kind, node.spelling, node.location.line)
+            if (node.location.file and node.location.file.name == filename):
+                if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
+                    if self.verbose:
+                        print 'FUNCTION_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self._init_func(node.spelling)
+                    if os.path.splitext(filename)[1] in ['.c', '.cpp']:
+                        self.functions[node.spelling]['FUNCTION_IMPL'] = {
                             'file': node.location.file.name,
                             'line': node.location.line,
-                    }
-                else:
-                    self.functions[node.spelling]['FUNCTION_DECL'] = {
+                        }
+                    else:
+                        self.functions[node.spelling]['FUNCTION_DECL'] = {
                             'file': node.location.file.name,
                             'line': node.location.line,
+                        }
+                elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
+                    if self.verbose:
+                        print 'TYPE_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self._init_type(node.spelling)
+                    self.types[node.spelling]['TYPE_DECL'] = {
+                        'file': node.location.file.name,
+                        'line': node.location.line,
                     }
-            elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
-                if self.verbose:
-                    print 'TYPE_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                self._init_type(node.spelling)
-                self.types[node.spelling]['TYPE_DECL'] = {
+                elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
+                    if self.verbose:
+                        print 'CALL:%s:%s: %d' % (node.spelling, node.location.file.name, node.location.line)
+                    self._init_func(node.spelling)
+                    self.functions[node.spelling]['CALL_EXPR'].append({
                         'file': node.location.file.name,
                         'line': node.location.line,
-                }
-            elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
-                if self.verbose:
-                    print 'CALL:%s:%s: %d' % (node.spelling, node.location.file.name, node.location.line)
-                self._init_func(node.spelling)
-                self.functions[node.spelling]['CALL_EXPR'].append({
+                    })
+                elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
+                    if self.verbose:
+                        print 'TYPE_REF:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self._init_type(node.spelling)
+                    self.types[node.spelling]['TYPE_REF'].append({
                         'file': node.location.file.name,
                         'line': node.location.line,
-                })
-            elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
-                if self.verbose:
-                    print 'TYPE_REF:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
-                self._init_type(node.spelling)
-                self.types[node.spelling]['TYPE_REF'].append({
-                        'file': node.location.file.name,
-                        'line': node.location.line,
-                })
+                    })
+        except ValueError:
+            # Incompatible libclang and pyclang?
+            if self.verbose:
+                print >>sys.stderr, "Ignoring node %s %s %d" % (node.spelling, node.location.file.name, node.location.line)
 
         for c in node.get_children():
             self.parse(c, filename)
 
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--verbose',
-            default=False,
-            help='Print out debug information.',
-            action='store_true')
+                        default=False,
+                        help='Print out debug information.',
+                        action='store_true')
     parser.add_argument('--port',
-            default=10000,
-            help='Listening port.')
+                        default=10000,
+                        help='Listening port.')
     parser.add_argument('--index',
-            help='Index file.')
+                        help='Index file.')
     parser.add_argument('--no_server',
-            default=False,
-            help='Do not start server.',
-            action='store_true')
+                        default=False,
+                        help='Do not start server.',
+                        action='store_true')
 
     args, unknown_args = parser.parse_known_args()
     argv = [sys.argv[0]] + unknown_args
@@ -340,4 +389,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
