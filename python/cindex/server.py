@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import clang.cindex
+import logging
 import os
 import platform
 import re
@@ -13,14 +14,29 @@ import watchdog
 
 class Indexer(object):
 
-    def __init__(self, verbose=False, index_file=None):
-        self.verbose = verbose
+    def __init__(self, index_file=None, log_file=None):
         self.index_file = index_file
         self.index_thread = None
         self.server_thread = None
         self.includes = []
         self.observer = None
         self.clear()
+
+        # Setup logging
+        self.logger = logging.getLogger('vim.cindex')
+        self.logger.setLevel(logging.DEBUG)
+
+        if log_file:
+            fh = logging.FileHandler(log_file)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
+            self.logger.addHandler(fh)
+        elif log_file is False:
+            nh = logging.NullHandler()
+            self.logger.addHandler(nh)
+        else:
+            ch = logging.StreamHandler()
+            self.logger.addHandler(ch)
 
         # Setup clang
         if platform.platform().startswith('Darwin'):
@@ -48,53 +64,44 @@ class Indexer(object):
         return sources
 
     def index(self, files=[], root=None):
-        if self.verbose:
-            print >>sys.stderr, 'Indexing %d file(s)...' % len(files)
+        self.logger.info('Indexing %d file(s)...',  len(files))
         t0 = time.time()
-        # Create internal structure
         for filename in files:
-            if self.verbose:
-                print 'Parsing %s' % filename
+            self.logger.debug('Parsing %s', filename)
             try:
+                # Get clang to parse file
                 tu = self.cindex.parse(filename, self.includes)
                 # Make sure to first remove any information that were
                 # previously in this file
-                # TODO // FIXME
                 for k in self.functions:
                     fn = self.functions[k]
                     decl = fn['FUNCTION_DECL']
                     impl = fn['FUNCTION_IMPL']
                     calls = fn['CALL_EXPR']
                     if (decl and decl['file'] == filename):
-                        if self.verbose:
-                            print >>sys.stderr, 'Removing function %s declaration from %s' % (
-                                k, filename)
+                        self.logger.debug(
+                            'Removing function %s declaration from %s', k, filename)
                         del self.functions[k]['FUNCTION_DECL']
                     if (impl and impl['file'] == filename):
-                        if self.verbose:
-                            print >>sys.stderr, 'Removing function %s implementation from %s' % (
-                                k, filename)
+                        self.logger.debug(
+                            'Removing function %s implementation from %s', k, filename)
                         del self.functions[k]['FUNCTION_IMPL']
                     for idx, call in enumerate(calls):
                         if call['file'] == filename:
-                            if self.verbose:
-                                print >>sys.stderr, 'Removing function %s call from %s' % (
-                                    k, filename)
+                            self.logger.debug(
+                                'Removing function %s call from %s', k, filename)
                             del self.functions[k]['CALL_EXPR'][idx]
-
+                # Fill internal structure
                 self.parse(tu.cursor, filename)
             except clang.cindex.TranslationUnitLoadError:
-                if self.verbose:
-                    print 'Failed ot parse %s' % filename
+                self.logger.warning('Failed ot parse %s', filename)
         t1 = time.time()
 
-        if self.verbose:
-            print >>sys.stderr, 'Done indexing %d file(s) %d function(s) %d type(s) in %0.3f ms...' % (
-                len(files), len(self.functions), len(self.types), (t1 - t0) * 1000.0)
+        self.logger.info('Done indexing %d file(s) %d function(s) %d type(s) in %0.3f ms...', len(
+            files), len(self.functions), len(self.types), (t1 - t0) * 1000.0)
 
         if self.index_file:
-            if self.verbose:
-                print >>sys.stderr, 'Saving index into %s' % self.index_file
+            self.logger.info('Saving index into %s', self.index_file)
             with open(self.index_file, 'w') as output:
                 for function in self.functions:
                     defined = False
@@ -144,8 +151,7 @@ class Indexer(object):
                             sources = self.indexer.crawl(event.src_path)
                             self.indexer.index(sources)
 
-                if self.verbose:
-                    print >>sys.stderr, 'Watching changes under %s' % root
+                self.logger.info('Watching changes under %s', root)
                 if self.observer:
                     self.observer.stop()
                 handler = EventHandler(self)
@@ -153,24 +159,12 @@ class Indexer(object):
                 self.observer.schedule(handler, root, recursive=True)
                 self.observer.start()
             except ImportError:
-                if self.verbose:
-                    print >>sys.stderr, 'File monitor not available'
-
-        # Debug output of structure
-        if self.verbose:
-            for function in self.functions:
-                if 'file' in self.functions[function]['FUNCTION_DECL']:
-                    print '%s (%s:%d)' % (function, self.functions[function]['FUNCTION_DECL']['file'], self.functions[function]['FUNCTION_DECL']['line'])
-                    for call in self.functions[function]['CALL_EXPR']:
-                        print '    %s:%d' % (call['file'], call['line'])
-                elif 'file' in self.functions[function]['FUNCTION_IMPL']:
-                    print '>>>> %s (%s:%d)' % (function, self.functions[function]['FUNCTION_IMPL']['file'], self.functions[function]['FUNCTION_IMPL']['line'])
-                    for call in self.functions[function]['CALL_EXPR']:
-                        print '    %s:%d' % (call['file'], call['line'])
-
+                self.logger.warning('File monitor not available')
+        # Clean up after ourself
         self.index_thread = None
 
-    def _get_unused_local_port(self):
+    @staticmethod
+    def get_unused_local_port():
         sock = socket.socket()
         # This tells the OS to give us any free port in the range [1024 -
         # 65535]
@@ -179,8 +173,9 @@ class Indexer(object):
         sock.close()
         return port
 
-    def StartServer(self):
-        port = self._get_unused_local_port()
+    def StartServer(self, port = None):
+        if not port:
+            port = Indexer.get_unused_local_port()
         self.server_thread = threading.Thread(target=self.run, args=(port,))
         self.server_thread.daemon = True
         self.server_thread.start()
@@ -202,27 +197,29 @@ class Indexer(object):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         server_address = ('localhost', int(port))
-        #print >>sys.stderr, 'Starting up on %s port %s' % server_address
+        self.logger.info('Starting up on port %d', int(port))
         sock.bind(server_address)
         # Listen for incoming connections
         sock.listen(1)
-        while True:
+        running = True
+        while running:
             # Wait for a connection
-            #print >>sys.stderr, 'Waiting for a connection'
+            self.logger.debug('Waiting for a connection')
             connection, client_address = sock.accept()
             try:
-                #print >>sys.stderr, 'Connection from', client_address
+                self.logger.debug('Connection from %s', client_address)
                 # Receive the data in small chunks and retransmit it
                 while True:
                     data = connection.recv(2048)
-                    #print >>sys.stderr, 'Received "%s"' % data.rstrip()
+                    self.logger.debug('Received "%s"', data.rstrip())
                     if data:
                         if data.startswith('QUIT'):
+                            self.logger.info("Requested to quit")
                             connection.sendall("DONE\n")
+                            running = False
                             break
                         elif data.startswith('INDEX'):
                             lookup = data[6:].rstrip()
-                            #print >>sys.stderr, "INDEX for '%s'" % lookup
                             if not self.index_thread:
                                 sources = self.crawl(lookup)
                                 self.clear()
@@ -234,7 +231,6 @@ class Indexer(object):
                                 connection.sendall("BUSY\n")
                         elif data.startswith('AUTO'):
                             lookup = data[5:].rstrip()
-                            #print >>sys.stderr, "AUTO for '%s'" % lookup
                             matches = set()
                             matches |= set(
                                 [k for k, v in self.functions.items() if k.startswith(lookup)])
@@ -244,7 +240,6 @@ class Indexer(object):
                                 connection.sendall("%s\n" % match)
                         elif data.startswith('IMPL'):
                             lookup = data[5:].rstrip()
-                            #print >>sys.stderr, "IMPL for '%s'" % lookup
                             impl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
@@ -255,7 +250,6 @@ class Indexer(object):
                                     impl['file'], impl['line'], impl['column']))
                         elif data.startswith('DECL'):
                             lookup = data[5:].rstrip()
-                            #print >>sys.stderr, "DECL for '%s'" % lookup
                             decl = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_DECL']:
@@ -272,7 +266,6 @@ class Indexer(object):
                                     decl['file'], decl['line'], decl['column']))
                         elif data.startswith('CALLS'):
                             lookup = data[6:].rstrip()
-                            #print >>sys.stderr, "CALLS for '%s'" % lookup
                             calls = None
                             if lookup in self.functions:
                                 if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
@@ -290,11 +283,13 @@ class Indexer(object):
                         connection.sendall("DONE\n")
 
                     else:
-                        #print >>sys.stderr, 'no more data from', client_address
+                        self.logger.debug(
+                            'No more data from %s', client_address)
                         break
             finally:
                 # Clean up the connection
                 connection.close()
+        self.logger.info('Server exiting')
 
     def _init_func(self, func):
         if not func in self.functions:
@@ -338,41 +333,37 @@ class Indexer(object):
 
     def parse(self, node, filename):
         try:
-            if self.verbose:
-                print 'Node %s %s %d' % (node.kind, node.spelling, node.location.line)
+            self.logger.debug('Node %s %s %d', node.kind,
+                              node.spelling, node.location.line)
             if (node.location.file and node.location.file.name == filename):
                 if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
-                    if self.verbose:
-                        print 'FUNCTION_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self.logger.debug('FUNCTION_DECL:%s:%s:%d', node.spelling,
+                                      node.location.file.name, node.location.line)
                     self._add_func(node)
                 elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
-                    if self.verbose:
-                        print 'TYPE_DECL:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self.logger.debug(
+                        'TYPE_DECL:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
                     self._add_type(node)
                 elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
-                    if self.verbose:
-                        print 'CALL:%s:%s: %d' % (node.spelling, node.location.file.name, node.location.line)
+                    self.logger.debug(
+                        'CALL:%s:%s: %d', node.spelling, node.location.file.name, node.location.line)
                     self._add_call(node)
                 elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
-                    if self.verbose:
-                        print 'TYPE_REF:%s:%s:%d' % (node.spelling, node.location.file.name, node.location.line)
+                    self.logger.debug(
+                        'TYPE_REF:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
                     self._add_ref(node)
         except ValueError:
             # Incompatible libclang and pyclang?
-            if self.verbose:
-                print >>sys.stderr, "Ignoring node %s %s %d" % (
-                    node.spelling, node.location.file.name, node.location.line)
+            self.logger.warning("Ignoring node %s %s %d", node.spelling,
+                                node.location.file.name, node.location.line)
 
+        # Recurse on children
         for c in node.get_children():
             self.parse(c, filename)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--verbose',
-                        default=False,
-                        help='Print out debug information.',
-                        action='store_true')
     parser.add_argument('--port',
                         default=10000,
                         help='Listening port.')
@@ -386,7 +377,7 @@ def main():
     args, unknown_args = parser.parse_known_args()
     argv = [sys.argv[0]] + unknown_args
 
-    indexer = Indexer(args.verbose, args.index)
+    indexer = Indexer(args.index)
     if len(argv) > 1:
         sources = indexer.crawl(argv[1])
         indexer.index(sources, argv[1])
