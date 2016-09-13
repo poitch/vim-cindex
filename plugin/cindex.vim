@@ -21,6 +21,14 @@ endif
 
 let g:loaded_cindex = 1
 
+if !exists("g:cindex_autostart")
+  let g:cindex_autostart = 1
+endif
+
+if !exists("g:cindex_debug_server")
+  let g:cindex_debug_server = 0
+endif
+
 " On-demand loading. Let's use the autoload folder and not slow down vim's
 " startup procedure.
 if has( 'vim_starting' ) " loading at startup

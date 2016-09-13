@@ -11,8 +11,10 @@ function! cindex#Enable()
     call s:SetupCommands()
 
     " Automatically start server and index current working directory
-    call cindex#StartServer()
-    call cindex#Reindex()
+    if g:cindex_autostart
+      call cindex#StartServer()
+      call cindex#Reindex()
+    endif
 endfunction
 
 " Starts vim.cindex server and retrieve assigned port
@@ -67,18 +69,32 @@ function! cindex#JumpToImplementation()
   endif
 endfunction
 
+function! cindex#Calls()
+  let wordUnderCursor = expand("<cword>")
+  let calls = cindex#SendMessage("CALLS " . wordUnderCursor)
+
+  let mylist = split(calls, '\v\n')
+  cgetexpr mylist
+  botright copen 5
+  " Auto-close
+  let l:closemap = ':cclose<CR>'
+  execute "nnoremap <buffer> <silent> <CR> <CR>" . l:closemap
+
+endfunction
+
 function s:SetupPython()
 python << endpython
 import os
 import traceback
 import vim
 # Add python sources folder to the system path.
+debug_server = vim.eval('g:cindex_debug_server')
 script_folder = vim.eval( 's:script_folder_path' )
 include_folder = os.path.join( script_folder, '..', 'python' )
 sys.path.insert( 0, include_folder )
 try:
     from cindex.setup import SetupCIndex
-    cindexer = SetupCIndex()
+    cindexer = SetupCIndex(debug_server)
 except Exception as error:
     vim.command( 'redraw | echohl WarningMsg' )
     for line in traceback.format_exc().splitlines():
@@ -95,6 +111,7 @@ endfunction
 
 function s:SetupKeyMappings()
     nnoremap <C-I> :call cindex#JumpToImplementation()<cr>
+    nnoremap <C-C> :call cindex#Calls()<cr>
 endfunction
 
 function s:SetupCommands()
@@ -102,5 +119,6 @@ function s:SetupCommands()
     command! CIStartServer call cindex#StartServer()
     command! CIStopServer call cindex#StopServer()
     command! CIIndex call cindex#Reindex()
+    command! CICalls call cindex#Calls()
 endfunction
 

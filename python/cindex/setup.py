@@ -2,13 +2,10 @@ from cindex.server import Indexer
 import os
 
 DIR_OF_CURRENT_SCRIPT = os.path.dirname(os.path.abspath(__file__))
-DEBUG = False
 
-port = None
-
-def SetupCIndex():
+def SetupCIndex(debug = 0):
     log_file = False
-    if DEBUG:
+    if int(debug) == 1:
         log_dir = os.path.join(DIR_OF_CURRENT_SCRIPT, "..", "..", "logs")
         if not os.path.isdir(log_dir):
             os.mkdir(log_dir)
