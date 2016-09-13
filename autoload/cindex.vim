@@ -1,7 +1,3 @@
-" Description: Index C and C++ files
-" Author: Jerome Poichet <poitch@gmail.com>
-" License: MIT
-
 let s:script_folder_path = escape( expand( '<sfile>:p:h' ), '\' )
 let s:indexer_command = s:script_folder_path . "/../python/cindex/search.py"
 
@@ -13,6 +9,10 @@ function! cindex#Enable()
 
     call s:SetupKeyMappings()
     call s:SetupCommands()
+
+    " Automatically start server and index current working directory
+    call cindex#StartServer()
+    call cindex#Reindex()
 endfunction
 
 " Starts vim.cindex server and retrieve assigned port
@@ -23,7 +23,6 @@ port = cindexer.StartServer()
 vim.command("let s:cindex_port = {0}".format(port))
 endpython
 endfunction
-
 
 function! cindex#SendMessage(msg)
   "echom "system " . s:indexer_command . " --port " . s:cindex_port ." " . a:msg

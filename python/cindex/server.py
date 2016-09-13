@@ -182,6 +182,7 @@ class Indexer(object):
     def StartServer(self):
         port = self._get_unused_local_port()
         self.server_thread = threading.Thread(target=self.run, args=(port,))
+        self.server_thread.daemon = True
         self.server_thread.start()
         return port
 
