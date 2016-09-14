@@ -77,7 +77,13 @@ class Indexer(object):
                                 'Removing function %s call from %s', k, filename)
                             del self.functions[k]['CALL_EXPR'][idx]
                 # Fill internal structure
-                self._parse(tu.cursor, filename)
+                content = list()
+                with open(filename) as f:
+                    content = f.readlines()
+
+                self.logger.debug("Loaded %d lines for %s",
+                                  len(content), filename)
+                self._parse(tu.cursor, filename, content)
             except clang.cindex.TranslationUnitLoadError:
                 self.logger.warning('Failed ot parse %s', filename)
         t1 = time.time()
@@ -127,15 +133,15 @@ class Indexer(object):
 
                     def on_modified(self, event):
                         if not event.is_directory:
-                            self.indexer.index([event.src_path])
+                            self.Index([event.src_path])
 
                     def on_created(self, event):
                         if not event.is_directory:
-                            self.indexer.index([event.src_path])
+                            self.Index([event.src_path])
                         else:
-                            sources = self.indexer.find_source_files(
+                            sources = Indexer.find_source_files(
                                 event.src_path)
-                            self.indexer.index(sources)
+                            self.Index(sources)
 
                 self.logger.info('Watching changes under %s', root)
                 if self.observer:
@@ -219,21 +225,22 @@ class Indexer(object):
         self.types[node.spelling][
             'TYPE_DECL'] = self._location_to_dict(node.location)
 
-    def _add_call(self, node):
-        # TODO we want the actual line as well
+    def _add_call(self, node, content):
         self._init_func(node.spelling)
-        self.functions[node.spelling]['CALL_EXPR'].append(
-            self._location_to_dict(node.location))
+        dct = self._location_to_dict(node.location)
+        dct['content'] = content.rstrip()
+        self.functions[node.spelling]['CALL_EXPR'].append(dct)
 
-    def _add_ref(self, node):
+    def _add_ref(self, node, content):
         self._init_type(node.spelling)
-        self.types[node.spelling]['TYPE_REF'].append(
-            self._location_to_dict(node.location))
+        dct = self._location_to_dict(node.location)
+        dct['content'] = content.rstrip()
+        self.types[node.spelling]['TYPE_REF'].append(dct)
 
-    def _parse(self, node, filename):
+    def _parse(self, node, filename, content):
         try:
-            self.logger.debug('Node %s %s %d', node.kind,
-                              node.spelling, node.location.line)
+            #self.logger.debug('Node %s %s %d', node.kind,
+                              #node.spelling, node.location.line)
             if (node.location.file and node.location.file.name == filename):
                 if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
                     self.logger.debug('FUNCTION_DECL:%s:%s:%d', node.spelling,
@@ -246,11 +253,11 @@ class Indexer(object):
                 elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
                     self.logger.debug(
                         'CALL:%s:%s: %d', node.spelling, node.location.file.name, node.location.line)
-                    self._add_call(node)
+                    self._add_call(node, content[node.location.line - 1])
                 elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
                     self.logger.debug(
                         'TYPE_REF:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
-                    self._add_ref(node)
+                    self._add_ref(node, content[node.location.line - 1])
         except ValueError:
             # Incompatible libclang and pyclang?
             self.logger.warning("Ignoring node %s %s %d", node.spelling,
@@ -258,4 +265,4 @@ class Indexer(object):
 
         # Recurse on children
         for c in node.get_children():
-            self._parse(c, filename)
+            self._parse(c, filename, content)

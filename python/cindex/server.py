@@ -13,6 +13,7 @@ DIR_OF_CURRENT_SCRIPT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(DIR_OF_CURRENT_SCRIPT, ".."))
 from cindex.indexer import Indexer
 
+
 class Server(object):
 
     def __init__(self, index_file=None, log_file=None):
@@ -22,7 +23,8 @@ class Server(object):
 
         if log_file:
             fh = logging.FileHandler(log_file)
-            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            formatter = logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(message)s')
             fh.setFormatter(formatter)
             self.logger.addHandler(fh)
         elif log_file is False:
@@ -45,7 +47,7 @@ class Server(object):
         sock.close()
         return port
 
-    def StartServer(self, port = None):
+    def StartServer(self, port=None):
         if not port:
             port = Server.get_unused_local_port()
         self.server_thread = threading.Thread(target=self._run, args=(port,))
@@ -121,8 +123,8 @@ class Server(object):
                             calls = self.indexer.Calls(lookup)
                             if (calls and len(calls) > 0):
                                 for call in calls:
-                                    connection.sendall("%s:%d:%d\n" % (
-                                        call['file'], call['line'], call['column']))
+                                    connection.sendall("%s:%d:%d:%s\n" % (
+                                        call['file'], call['line'], call['column'], call['content']))
 
                         # If we got that far, it means we did not find an
                         # answer
@@ -136,6 +138,7 @@ class Server(object):
                 # Clean up the connection
                 connection.close()
         self.logger.info('Server exiting')
+
 
 def main():
     parser = argparse.ArgumentParser()
