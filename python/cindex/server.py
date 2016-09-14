@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import argparse
-import clang.cindex
 import logging
 import os
 import platform
@@ -9,19 +8,14 @@ import socket
 import sys
 import threading
 import time
-import watchdog
 
+DIR_OF_CURRENT_SCRIPT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(DIR_OF_CURRENT_SCRIPT, ".."))
+from cindex.indexer import Indexer
 
-class Indexer(object):
+class Server(object):
 
     def __init__(self, index_file=None, log_file=None):
-        self.index_file = index_file
-        self.index_thread = None
-        self.server_thread = None
-        self.includes = []
-        self.observer = None
-        self.clear()
-
         # Setup logging
         self.logger = logging.getLogger('vim.cindex')
         self.logger.setLevel(logging.DEBUG)
@@ -38,130 +32,8 @@ class Indexer(object):
             ch = logging.StreamHandler()
             self.logger.addHandler(ch)
 
-        # Setup clang
-        if platform.platform().startswith('Darwin'):
-            lib_path = '/Library/Developer/CommandLineTools/usr/lib/libclang.dylib'
-            clang.cindex.Config.set_library_file(lib_path)
-        elif platform.platform().startswith('Linux'):
-            lib_path = '/usr/lib/youcompleteme/third_party/ycmd/libclang.so'
-            clang.cindex.Config.set_library_file(lib_path)
-        else:
-            from ctypes.util import find_library
-            clang.cindex.Config.set_library_file(find_library('clang'))
-        self.cindex = clang.cindex.Index.create()
-
-    def clear(self):
-        self.functions = {}
-        self.types = {}
-
-    def crawl(self, rootdir):
-        sources = []
-        for root, subdirs, files in os.walk(rootdir):
-            for filename in files:
-                if os.path.splitext(filename)[1] in ['.c', '.cpp', '.h', '.hpp']:
-                    filename = os.path.join(root, filename)
-                    sources.append(filename)
-        return sources
-
-    def index(self, files=[], root=None):
-        self.logger.info('Indexing %d file(s)...',  len(files))
-        t0 = time.time()
-        for filename in files:
-            self.logger.debug('Parsing %s', filename)
-            try:
-                # Get clang to parse file
-                tu = self.cindex.parse(filename, self.includes)
-                # Make sure to first remove any information that were
-                # previously in this file
-                for k in self.functions:
-                    fn = self.functions[k]
-                    decl = fn['FUNCTION_DECL']
-                    impl = fn['FUNCTION_IMPL']
-                    calls = fn['CALL_EXPR']
-                    if (decl and decl['file'] == filename):
-                        self.logger.debug(
-                            'Removing function %s declaration from %s', k, filename)
-                        del self.functions[k]['FUNCTION_DECL']
-                    if (impl and impl['file'] == filename):
-                        self.logger.debug(
-                            'Removing function %s implementation from %s', k, filename)
-                        del self.functions[k]['FUNCTION_IMPL']
-                    for idx, call in enumerate(calls):
-                        if call['file'] == filename:
-                            self.logger.debug(
-                                'Removing function %s call from %s', k, filename)
-                            del self.functions[k]['CALL_EXPR'][idx]
-                # Fill internal structure
-                self.parse(tu.cursor, filename)
-            except clang.cindex.TranslationUnitLoadError:
-                self.logger.warning('Failed ot parse %s', filename)
-        t1 = time.time()
-
-        self.logger.info('Done indexing %d file(s) %d function(s) %d type(s) in %0.3f ms...', len(
-            files), len(self.functions), len(self.types), (t1 - t0) * 1000.0)
-
-        if self.index_file:
-            self.logger.info('Saving index into %s', self.index_file)
-            with open(self.index_file, 'w') as output:
-                for function in self.functions:
-                    defined = False
-                    if 'file' in self.functions[function]['FUNCTION_DECL']:
-                        output.write("DECL %s (%s:%d)\n" % (function, self.functions[function][
-                                     'FUNCTION_DECL']['file'], self.functions[function]['FUNCTION_DECL']['line']))
-                        defined = True
-                    if 'file' in self.functions[function]['FUNCTION_IMPL']:
-                        output.write("IMPL %s (%s:%d)\n" % (function, self.functions[function][
-                                     'FUNCTION_IMPL']['file'], self.functions[function]['FUNCTION_IMPL']['line']))
-                        defined = True
-                    if defined:
-                        for call in self.functions[function]['CALL_EXPR']:
-                            output.write("CALL %s (%s:%d)\n" %
-                                         (function, call['file'], call['line']))
-                for tpe in self.types:
-                    if 'file' in self.types[tpe]['TYPE_DECL']:
-                        output.write("TYPE %s (%s:%d)\n" % (function, self.types[tpe][
-                                     'TYPE_DECL']['file'], self.types[tpe]['TYPE_DECL']['line']))
-                        for call in self.types[tpe]['TYPE_REF']:
-                            output.write("REF %s (%s:%d)\n" %
-                                         (function, call['file'], call['line']))
-        if root:
-            # Attempt to watch changes if monitor is available
-            try:
-                from watchdog.observers import Observer
-                from watchdog.events import FileSystemEventHandler
-
-                class EventHandler(FileSystemEventHandler):
-
-                    def __init__(self, indexer):
-                        self.indexer = indexer
-
-                    def on_deleted(self, event):
-                        # That one is tricky, we technically need to clean up
-                        # files deleted from the internal structures
-                        return
-
-                    def on_modified(self, event):
-                        if not event.is_directory:
-                            self.indexer.index([event.src_path])
-
-                    def on_created(self, event):
-                        if not event.is_directory:
-                            self.indexer.index([event.src_path])
-                        else:
-                            sources = self.indexer.crawl(event.src_path)
-                            self.indexer.index(sources)
-
-                self.logger.info('Watching changes under %s', root)
-                if self.observer:
-                    self.observer.stop()
-                handler = EventHandler(self)
-                self.observer = Observer()
-                self.observer.schedule(handler, root, recursive=True)
-                self.observer.start()
-            except ImportError:
-                self.logger.warning('File monitor not available')
-        # Clean up after ourself
         self.index_thread = None
+        self.indexer = Indexer(index_file, self.logger)
 
     @staticmethod
     def get_unused_local_port():
@@ -175,8 +47,8 @@ class Indexer(object):
 
     def StartServer(self, port = None):
         if not port:
-            port = Indexer.get_unused_local_port()
-        self.server_thread = threading.Thread(target=self.run, args=(port,))
+            port = Server.get_unused_local_port()
+        self.server_thread = threading.Thread(target=self._run, args=(port,))
         self.server_thread.daemon = True
         self.server_thread.start()
         return port
@@ -186,7 +58,7 @@ class Indexer(object):
             self.server_thread.stop()
             self.server_thread = None
 
-    def run(self, port=10000):
+    def _run(self, port=10000):
         """Start TCP server to answer basic grammar:
             DECL <name> returns location of function/type declaration
             IMPL <name> returns locatino of function/type implementation
@@ -221,58 +93,32 @@ class Indexer(object):
                         elif data.startswith('INDEX'):
                             lookup = data[6:].rstrip()
                             if not self.index_thread:
-                                sources = self.crawl(lookup)
-                                self.clear()
                                 self.index_thread = threading.Thread(
-                                    target=self.index, args=(sources, lookup,))
+                                    target=self.indexer.IndexDirectory, args=(lookup,))
                                 self.index_thread.start()
                                 connection.sendall("INDEXING\n")
                             else:
                                 connection.sendall("BUSY\n")
                         elif data.startswith('AUTO'):
                             lookup = data[5:].rstrip()
-                            matches = set()
-                            matches |= set(
-                                [k for k, v in self.functions.items() if k.startswith(lookup)])
-                            matches |= set(
-                                [k for k, v in self.types.items() if k.startswith(lookup)])
+                            matches = self.indexer.Autocomplete(lookup)
                             for match in matches:
                                 connection.sendall("%s\n" % match)
                         elif data.startswith('IMPL'):
                             lookup = data[5:].rstrip()
-                            impl = None
-                            if lookup in self.functions:
-                                if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
-                                    impl = self.functions[
-                                        lookup]['FUNCTION_IMPL']
+                            impl = self.indexer.Implementation(lookup)
                             if impl:
                                 connection.sendall("%s:%d:%d\n" % (
                                     impl['file'], impl['line'], impl['column']))
                         elif data.startswith('DECL'):
                             lookup = data[5:].rstrip()
-                            decl = None
-                            if lookup in self.functions:
-                                if 'file' in self.functions[lookup]['FUNCTION_DECL']:
-                                    decl = self.functions[
-                                        lookup]['FUNCTION_DECL']
-                                elif 'file' in self.functions[lookup]['FUNCTION_IMPL']:
-                                    decl = self.functions[
-                                        lookup]['FUNCTION_IMPL']
-                            elif lookup in self.types:
-                                if 'file' in self.types[lookup]['TYPE_DECL']:
-                                    decl = self.types[lookup]['TYPE_DECL']
+                            decl = self.indexer.Declaration(lookup)
                             if decl:
                                 connection.sendall("%s:%d:%d\n" % (
                                     decl['file'], decl['line'], decl['column']))
                         elif data.startswith('CALLS'):
                             lookup = data[6:].rstrip()
-                            calls = None
-                            if lookup in self.functions:
-                                if 'file' in self.functions[lookup]['FUNCTION_IMPL']:
-                                    calls = self.functions[lookup]['CALL_EXPR']
-                            elif lookup in self.types:
-                                if 'file' in self.types[lookup]['TYPE_DECL']:
-                                    calls = self.types[lookup]['TYPE_REF']
+                            calls = self.indexer.Calls(lookup)
                             if (calls and len(calls) > 0):
                                 for call in calls:
                                     connection.sendall("%s:%d:%d\n" % (
@@ -291,77 +137,6 @@ class Indexer(object):
                 connection.close()
         self.logger.info('Server exiting')
 
-    def _init_func(self, func):
-        if not func in self.functions:
-            self.functions[func] = {'FUNCTION_IMPL': {},
-                                    'FUNCTION_DECL': {}, 'CALL_EXPR': []}
-
-    def _init_type(self, tpe):
-        if not tpe in self.types:
-            self.types[tpe] = {'TYPE_DECL': {}, 'TYPE_REF': []}
-
-    def _location_to_json(self, location):
-            return {
-                'file': location.file.name,
-                'line': location.line,
-                'column': location.column,
-            }
-
-    def _add_func(self, node):
-        self._init_func(node.spelling)
-        if os.path.splitext(node.location.file.name)[1] in ['.c', '.cpp']:
-            self.functions[node.spelling][
-                'FUNCTION_IMPL'] = self._location_to_json(node.location)
-        else:
-            self.functions[node.spelling][
-                'FUNCTION_DECL'] = self._location_to_json(node.location)
-
-    def _add_type(self, node):
-        self._init_type(node.spelling)
-        self.types[node.spelling][
-            'TYPE_DECL'] = self._location_to_json(node.location)
-
-    def _add_call(self, node):
-        self._init_func(node.spelling)
-        self.functions[node.spelling]['CALL_EXPR'].append(
-            self._location_to_json(node.location))
-
-    def _add_ref(self, node):
-        self._init_type(node.spelling)
-        self.types[node.spelling]['TYPE_REF'].append(
-            self._location_to_json(node.location))
-
-    def parse(self, node, filename):
-        try:
-            self.logger.debug('Node %s %s %d', node.kind,
-                              node.spelling, node.location.line)
-            if (node.location.file and node.location.file.name == filename):
-                if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
-                    self.logger.debug('FUNCTION_DECL:%s:%s:%d', node.spelling,
-                                      node.location.file.name, node.location.line)
-                    self._add_func(node)
-                elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
-                    self.logger.debug(
-                        'TYPE_DECL:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
-                    self._add_type(node)
-                elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
-                    self.logger.debug(
-                        'CALL:%s:%s: %d', node.spelling, node.location.file.name, node.location.line)
-                    self._add_call(node)
-                elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
-                    self.logger.debug(
-                        'TYPE_REF:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
-                    self._add_ref(node)
-        except ValueError:
-            # Incompatible libclang and pyclang?
-            self.logger.warning("Ignoring node %s %s %d", node.spelling,
-                                node.location.file.name, node.location.line)
-
-        # Recurse on children
-        for c in node.get_children():
-            self.parse(c, filename)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port',
@@ -377,12 +152,12 @@ def main():
     args, unknown_args = parser.parse_known_args()
     argv = [sys.argv[0]] + unknown_args
 
-    indexer = Indexer(args.index)
+    server = Server(args.index)
     if len(argv) > 1:
-        sources = indexer.crawl(argv[1])
-        indexer.index(sources, argv[1])
+        sources = server.indexer.find_source_files(argv[1])
+        server.indexer.Index(sources, argv[1])
     if not args.no_server:
-        indexer.run(args.port)
+        server._run(args.port)
 
     return 0
 

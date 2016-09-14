@@ -73,13 +73,13 @@ function! cindex#Calls()
   let wordUnderCursor = expand("<cword>")
   let calls = cindex#SendMessage("CALLS " . wordUnderCursor)
 
+  " Show list of calls in error area so it's easy to jump
   let mylist = split(calls, '\v\n')
   cgetexpr mylist
   botright copen 5
   " Auto-close
   let l:closemap = ':cclose<CR>'
   execute "nnoremap <buffer> <silent> <CR> <CR>" . l:closemap
-
 endfunction
 
 function s:SetupPython()
