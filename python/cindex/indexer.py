@@ -133,15 +133,15 @@ class Indexer(object):
 
                     def on_modified(self, event):
                         if not event.is_directory:
-                            self.Index([event.src_path])
+                            self.indexer.Index([event.src_path])
 
                     def on_created(self, event):
                         if not event.is_directory:
-                            self.Index([event.src_path])
+                            self.indexer.Index([event.src_path])
                         else:
                             sources = Indexer.find_source_files(
                                 event.src_path)
-                            self.Index(sources)
+                            self.indexer.Index(sources)
 
                 self.logger.info('Watching changes under %s', root)
                 if self.observer:

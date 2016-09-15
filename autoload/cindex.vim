@@ -92,6 +92,14 @@ debug_server = vim.eval('g:cindex_debug_server')
 script_folder = vim.eval( 's:script_folder_path' )
 include_folder = os.path.join( script_folder, '..', 'python' )
 sys.path.insert( 0, include_folder )
+
+# Check if dependencies were installed
+try:
+    import clang.cindex
+    import watchdog
+except ImportError:
+    vim.command( 'echoerr "CIndex not available"' )
+    vim.command( 'return 0')
 try:
     from cindex.setup import SetupCIndex
     cindexer = SetupCIndex(debug_server)
