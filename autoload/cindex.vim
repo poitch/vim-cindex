@@ -49,7 +49,7 @@ function! cindex#JumpToImplementation()
   let names =  matchlist( location, '\(.\{-1,}\):\%(\(\d\+\)\%(:\(\d*\):\?\)\?\)\?')
   if empty(names)
     return
-	endif
+  endif
 
   let file_name = names[1]
   let line_num  = names[2] == ''? '0' : names[2]
@@ -97,12 +97,13 @@ sys.path.insert( 0, include_folder )
 try:
     import clang.cindex
     import watchdog
-except ImportError:
-    vim.command( 'echoerr "CIndex not available"' )
-    vim.command( 'return 0')
-try:
     from cindex.setup import SetupCIndex
     cindexer = SetupCIndex(debug_server)
+except ImportError:
+    vim.command( 'redraw | echohl WarningMsg' )
+    vim.command( "echo 'CIndex unavailable'" )
+    vim.command( 'echohl None' )
+    vim.command( 'return 0')
 except Exception as error:
     vim.command( 'redraw | echohl WarningMsg' )
     for line in traceback.format_exc().splitlines():
