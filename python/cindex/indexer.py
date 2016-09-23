@@ -237,10 +237,10 @@ class Indexer(object):
         dct['content'] = content.rstrip()
         self.types[node.spelling]['TYPE_REF'].append(dct)
 
-    def _parse(self, node, filename, content):
+    def _parse(self, node, filename, content, depth = 0):
         try:
-            #self.logger.debug('Node %s %s %d', node.kind,
-                              #node.spelling, node.location.line)
+            self.logger.debug('%s| %s %s %d', ' ' * depth, node.kind,
+                              node.spelling, node.location.line)
             if (node.location.file and node.location.file.name == filename):
                 if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL):
                     self.logger.debug('FUNCTION_DECL:%s:%s:%d', node.spelling,
@@ -248,21 +248,23 @@ class Indexer(object):
                     self._add_func(node)
                 elif (node.kind == clang.cindex.CursorKind.TYPEDEF_DECL):
                     self.logger.debug(
-                        'TYPE_DECL:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
+                        '%s   TYPE_DECL:%s:%s:%d', ' ' * depth, node.spelling, node.location.file.name, node.location.line)
                     self._add_type(node)
                 elif (node.kind == clang.cindex.CursorKind.CALL_EXPR):
                     self.logger.debug(
-                        'CALL:%s:%s: %d', node.spelling, node.location.file.name, node.location.line)
+                        '%s   CALL:%s:%s: %d', ' ' * depth, node.spelling, node.location.file.name, node.location.line)
                     self._add_call(node, content[node.location.line - 1])
                 elif (node.kind == clang.cindex.CursorKind.TYPE_REF):
                     self.logger.debug(
-                        'TYPE_REF:%s:%s:%d', node.spelling, node.location.file.name, node.location.line)
+                        '%s   TYPE_REF:%s:%s:%d', ' ' * depth, node.spelling, node.location.file.name, node.location.line)
                     self._add_ref(node, content[node.location.line - 1])
         except ValueError:
             # Incompatible libclang and pyclang?
-            self.logger.warning("Ignoring node %s %s %d", node.spelling,
+            self.logger.warning("%s  Ignoring node %s %s %d", ' ' * depth, node.spelling,
                                 node.location.file.name, node.location.line)
 
         # Recurse on children
         for c in node.get_children():
-            self._parse(c, filename, content)
+            #self.logger.debug('%s++ %s %s', ' ' * depth, c.kind, c.spelling)
+            self._parse(c, filename, content, depth + 1)
+

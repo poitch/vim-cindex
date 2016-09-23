@@ -157,8 +157,12 @@ def main():
 
     server = Server(args.index)
     if len(argv) > 1:
-        sources = server.indexer.find_source_files(argv[1])
-        server.indexer.Index(sources, argv[1])
+        if os.path.isdir(argv[1]):
+            sources = server.indexer.find_source_files(argv[1])
+            server.indexer.Index(sources, argv[1])
+        else:
+            server.indexer.Index([argv[1]], os.path.dirname(argv[1]))
+
     if not args.no_server:
         server._run(args.port)
 
